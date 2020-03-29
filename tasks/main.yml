@@ -3,6 +3,13 @@
     manager: auto
   tags: always
 
+# update packages
+- name: update all packages
+  package:
+    name: '*'
+    state: latest
+  when: update_packages
+
 # local_admin fact - AWS
 - block:
     - name: set fact for local_admin (distribution name) - AWS
