@@ -1,0 +1,189 @@
+- name: Gathering Package Facts
+  package_facts:
+    manager: auto
+  tags: always
+
+# local_admin fact - AWS
+- block:
+    - name: set fact for local_admin (distribution name) - AWS
+      set_fact:
+        local_admin: "{{ ansible_distribution | lower }}"
+      when: ansible_distribution in ["CentOS", "Fedora", "Debian"]
+
+    - name: set fact for local_admin (ec2-user) - AWS
+      set_fact:
+        local_admin: "ec2-user"
+      when: ansible_distribution in ["Amazon", "RedHat"]
+
+  when: ansible_system_vendor in ["Amazon EC2", "Xen"]
+
+# logging
+- block:
+    - name: stop auditd
+      command: service auditd stop
+      args:
+        warn: False
+      when: "'audit' in ansible_facts.packages"
+
+    - name: stop journald
+      service:
+        name: systemd-journald
+        state: stopped
+      when: ansible_service_mgr == "systemd"
+
+    - name: stop rsyslog
+      service:
+        name: rsyslog
+        state: stopped
+
+    - name: find log files
+      find:
+        paths: /var/log
+        recurse: no
+        file_type: file
+      register: log_files
+
+    - name: delete log files
+      file:
+        path: "{{ item.path }}"
+        state: absent
+      with_items: "{{ log_files.files }}"
+
+    - name: find log directories, exclude audit
+      find:
+        paths: /var/log
+        recurse: no
+        file_type: directory
+        excludes: 'audit'
+      register: log_directories
+
+    - name: delete log directories
+      file:
+        path: "{{ item.path }}"
+        state: absent
+      with_items: "{{ log_directories.files }}"
+
+    - name: clear audit log
+      copy:
+        content: ""
+        dest: /var/log/audit/audit.log
+        force: yes
+
+    - name: cloud-init clean
+      command: cloud-init clean
+      when: "'cloud-init' in ansible_facts.packages"
+
+    - name: clear journal
+      command: journalctl --vacuum-size=0M
+      when: ansible_service_mgr == "systemd"
+
+    - name: recreate lastlog
+      file:
+        path: /var/log/lastlog
+        state: touch
+        owner: root
+        group: root
+        mode: 0644
+        seuser: system_u
+        serole: object_r
+        setype: lastlog_t
+        selevel: s0
+
+    - name: recreate sssd log dir
+      file:
+        path: /var/log/sssd
+        state: directory
+        owner: sssd
+        group: sssd
+        mode: 0750
+        seuser: system_u
+        serole: object_r
+        setype: sssd_var_log_t
+        selevel: s0
+      when: "'sssd' in ansible_facts.packages"
+
+    - name: recreate sysstat log dir
+      file:
+        path: /var/log/sa
+        state: directory
+        owner: root
+        group: root
+        mode: 0755
+        seuser: system_u
+        serole: object_r
+        setype: sysstat_log_t
+        selevel: s0
+      when: "'sysstat' in ansible_facts.packages"
+
+# package cache
+- block:
+    # yum cache
+    - name: clear yum cache
+      file:
+        path: "/var/cache/yum/x86_64/{{ ansible_distribution_major_version }}"
+        state: absent
+      when:
+        - ansible_distribution in ["CentOS", "RedHat"]
+        - ansible_pkg_mgr == "yum"
+
+    # dnf cache
+    - block:
+        - name: find dnf cache
+          find:
+            paths: /var/cache/dnf
+            patterns:
+              - '*.solv'
+              - '*.solvx'
+            file_type: file
+          register: dnf_cache
+
+        - name: delete dnf cache
+          file:
+            path: "{{ item.path }}"
+            state: absent
+          with_items: "{{ dnf_cache.files }}"
+
+      when:
+        - ansible_pkg_mgr == "dnf"
+
+- name: clear /etc/machine-id
+  copy:
+    content: ""
+    dest: /etc/machine-id
+    force: yes
+    group: root
+    owner: root
+    mode: 0444
+    seuser: system_u
+    serole: object_r
+    setype: machineid_t
+    selevel: s0
+
+# SSH
+- block:
+    - name: find ssh host keys
+      find:
+        paths: /etc/ssh
+        patterns: 'ssh_host_*'
+        file_type: file
+      register: ssh_host_keys
+
+    - name: delete ssh host keys
+      file:
+        path: "{{ item.path }}"
+        state: absent
+      with_items: "{{ ssh_host_keys.files }}"
+
+# history
+- name: clear history for local admin account
+  copy:
+    content: ""
+    dest: /home/{{ local_admin }}/.bash_history
+    force: yes
+    group: "{{ local_admin }}"
+    owner: "{{ local_admin }}"
+    mode: 0600
+    seuser: system_u
+    serole: object_r
+    setype: user_home_t
+    selevel: s0
