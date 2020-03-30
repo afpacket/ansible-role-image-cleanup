@@ -24,6 +24,37 @@
 
   when: ansible_system_vendor in ["Amazon EC2", "Xen"]
 
+# amazon cloudwatch agent
+- block:
+    - name: amazon-cloudwatch-agent - stop service
+      service:
+        name: amazon-cloudwatch-agent
+        state: stopped
+
+    - name: amazon-cloudwatch-agent - find state files
+      find:
+        paths: /opt/aws/amazon-cloudwatch-agent/logs/state
+        recurse: no
+        file_type: file
+      register: cwa_state_files
+
+    - name: amazon-cloudwatch-agent - delete state files
+      file:
+        path: "{{ item.path }}"
+        state: absent
+      with_items: "{{ cwa_state_files.files }}"
+
+    - name: amazon-cloudwatch-agent - delete config and log files
+      file:
+        path: "{{ item }}"
+        state: absent
+      with_items:
+        - '/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.toml'
+        - '/opt/aws/amazon-cloudwatch-agent/etc/log-config.json'
+        - '/opt/aws/amazon-cloudwatch-agent/logs/amazon-cloudwatch-agent.log'
+
+  when: "'amazon-cloudwatch-agent' in ansible_facts.packages"
+
 # logging
 - block:
     - name: stop auditd
